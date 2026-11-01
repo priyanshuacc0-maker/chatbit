@@ -16,9 +16,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val selectedPeerId = repository.selectedPeerId
     val onlinePeerIds = repository.onlinePeerIds
     val localName = repository.localName
+    val localDeviceId = repository.localDeviceId
+    val unread = repository.unread
+    val connecting = repository.connecting
+    val inviteActive = repository.inviteActive
+    val searchPausedByUser: Boolean get() = repository.searchPausedByUser
 
     fun startNearby() = repository.startNearby()
-    fun stopDiscovery() = repository.stopDiscovery()
+    fun stopDiscovery() = repository.stopDiscovery(byUser = true)
+    fun stopAll() = repository.stopAll()
     fun connect(endpointId: String) = repository.connect(endpointId)
     fun acceptPairing(endpointId: String) = repository.acceptPairing(endpointId)
     fun rejectPairing(endpointId: String) = repository.rejectPairing(endpointId)
@@ -29,6 +35,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun forgetPeer(peerId: String) = repository.forgetPeer(peerId)
     fun reportStatus(message: String) = repository.reportStatus(message)
     fun setAppVisible(visible: Boolean) = repository.setAppVisible(visible)
+
+    fun createInvite(): String = repository.createInvite()
+    fun cancelInvite() = repository.cancelInvite()
+    fun joinInvite(raw: String): Boolean = repository.joinInvite(raw)
 
     fun permissionDenied() = repository.reportPermissionDenied()
 }

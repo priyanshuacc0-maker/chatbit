@@ -1,11 +1,11 @@
 name: Build APK
 
-# Every push to main (or a manual run) rebuilds the APK and refreshes the
-# rolling "latest" release. Pushing a tag like v0.3.0 cuts a versioned release.
+# Every push to main (or a manual run) rebuilds the signed APK and attaches it
+# to the run as a downloadable artifact. Nothing is published as a release
+# while the app is under development.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version_name:
@@ -14,7 +14,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: apk-${{ github.ref }}
@@ -122,37 +122,10 @@ jobs:
           echo "file=dist/$NAME" >> "$GITHUB_OUTPUT"
           ls -lh dist
 
+      # Download from the run page (Actions -> this run -> Artifacts).
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: chatbit-apk-vc${{ steps.ver.outputs.code }}
           path: dist/*.apk
           retention-days: 90
-
-      - name: Publish to GitHub Releases
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VC: ${{ steps.ver.outputs.code }}
-          VN: ${{ steps.ver.outputs.name }}
-          SIGNED: ${{ steps.keystore.outputs.signed }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [ "$REF_TYPE" = "tag" ]; then TAG="$REF_NAME"; else TAG="latest"; fi
-
-          NOTES="versionCode $VC, built from $GITHUB_SHA."
-          if [ "$SIGNED" = "true" ]; then
-            NOTES="$NOTES Signed with the project release key, so it installs over the previous version."
-          else
-            NOTES="$NOTES Debug-signed: uninstall the old app first, it cannot update in place."
-          fi
-
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.apk --clobber
-            gh release edit "$TAG" --notes "$NOTES"
-          else
-            gh release create "$TAG" dist/*.apk --title "ChatBit $TAG" --notes "$NOTES"
-          fi
-          echo "Published to release: $TAG"

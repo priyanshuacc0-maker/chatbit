@@ -17,8 +17,8 @@ android {
         applicationId = "com.meshline.chat"
         minSdk = 26
         targetSdk = 35
-        versionCode = overrideVersionCode ?: 2
-        versionName = overrideVersionName ?: "0.2.0"
+        versionCode = overrideVersionCode ?: 3
+        versionName = overrideVersionName ?: "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -85,6 +85,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.google.android.gms:play-services-nearby:19.5.0")
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

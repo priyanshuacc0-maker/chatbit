@@ -1,8 +1,15 @@
-# Meshline — offline-first Android chat (v0.2)
+# Meshline — offline-first Android chat (v0.3)
 
 Meshline is a native Android peer-to-peer text-chat prototype. Its transport is Google Nearby Connections, which discovers nearby app instances and chooses an available short-range transport (Bluetooth, BLE and/or Wi-Fi). Message traffic does not use a Meshline server or require mobile data/a router once the devices can see each other.
 
 > **Honest build status:** this is an initial source prototype for local text chat, not a verified production messenger. The container used to create it has no Android SDK or Gradle installation, so a full Android APK build and two-physical-phone radio test could not be run here. The platform-neutral session-crypto code was compiled independently and passed a smoke test for matching ECDH keys, Unicode AES-GCM round-trip, nonce uniqueness and tamper rejection. Kotlin source parsing and manifest/resource XML parsing also passed, but this is not a full Android compile. Use the two-device checklist below before relying on it.
+
+## What is new in v0.3
+
+- **Auto-connect.** Search starts by itself when the app opens (permissions are asked once on first launch) and stays on while the app is visible; the battery timer only applies in the background. "Pause search" is respected. Bluetooth/Location-off now opens the right system screen.
+- **Optional QR pairing.** Menu → Show QR on one phone, Scan QR on the other (Google's code scanner, no camera permission). The joiner connects automatically and proves it saw the QR with an HMAC over both device IDs, so no code comparison or accept dialogs are needed. Single-use, 5-minute validity. The normal Nearby + four-digit code flow still works and is unchanged.
+- **New look.** Slide-out menu, chat list with search, filter chips, unread badges and a new-chat button, and a chat screen with Chat / Details tabs, day separators and delivery ticks.
+- Nearby list shows "Connecting…" progress; unread counts are kept per chat.
 
 ## What is new in v0.2
 

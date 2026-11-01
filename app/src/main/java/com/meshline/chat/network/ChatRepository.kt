@@ -22,6 +22,7 @@ import com.meshline.chat.data.StoredMessage
 import com.meshline.chat.notify.MessageNotifier
 import com.meshline.chat.security.DeviceIdentity
 import com.meshline.chat.security.Identity
+import com.meshline.chat.security.PairInvite
 import com.meshline.chat.security.SessionCrypto
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,8 @@ data class NearbyPeer(val endpointId: String, val name: String, val known: Boole
 data class PendingPairing(val endpointId: String, val name: String, val verificationCode: String)
 
 private class PacketTooLargeException : Exception("Message is too large")
+private class ActiveInvite(val token: ByteArray, val expiresAt: Long)
+private data class ParsedName(val name: String, val prefix: String?, val qr: Boolean)
 
 /**
  * Process-scoped engine: Nearby lifecycle, signed key exchange, encrypted protocol, outbox/retry.
@@ -67,6 +70,9 @@ class ChatRepository(context: Context) {
         private const val MAX_ADVERTISED_NAME_BYTES = 40
         private const val IDLE_STOP_MS = 10 * 60_000L
         private const val CONNECTED_STOP_MS = 2 * 60_000L
+        private const val INVITE_TTL_MS = 5 * 60_000L
+        private const val JOIN_WAIT_MS = 45_000L
+        private const val QR_HINT = "q"
     }
 
     private val appContext = context.applicationContext
@@ -100,6 +106,13 @@ class ChatRepository(context: Context) {
     val selectedPeerId: StateFlow<String?> = _selectedPeerId.asStateFlow()
     private val _onlinePeerIds = MutableStateFlow<Set<String>>(emptySet())
     val onlinePeerIds: StateFlow<Set<String>> = _onlinePeerIds.asStateFlow()
+    private val _unread = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val unread: StateFlow<Map<String, Int>> = _unread.asStateFlow()
+    private val _connecting = MutableStateFlow<Set<String>>(emptySet())
+    val connecting: StateFlow<Set<String>> = _connecting.asStateFlow()
+    private val _inviteActive = MutableStateFlow(false)
+    val inviteActive: StateFlow<Boolean> = _inviteActive.asStateFlow()
+    val searchPausedByUser: Boolean get() = prefs.getBoolean("paused", false)
 
     /** True while discovery is running or at least one peer is connected. Drives the service. */
     val isActive: StateFlow<Boolean> = combine(_isDiscovering, _onlinePeerIds) { discovering, online ->
@@ -120,6 +133,10 @@ class ChatRepository(context: Context) {
     private val sessionKeys = ConcurrentHashMap<String, SecretKeySpec>()
     private val requestedEndpoints: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
     private val handshakeLock = Any()
+    @Volatile private var myInvite: ActiveInvite? = null          // QR we are showing
+    @Volatile private var joinTarget: PairInvite.Invite? = null   // QR we scanned
+    private val qrProvisional: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
+    private val endpointPrefixes = ConcurrentHashMap<String, String>()
 
     private val endpointByPeerId = ConcurrentHashMap<String, String>()       // set once session ready
     private val retryJobs = ConcurrentHashMap<String, Job>()
@@ -145,29 +162,46 @@ class ChatRepository(context: Context) {
 
     private val lifecycleCallback = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            val (name, prefix) = parseEndpointName(info.endpointName)
+            val (name, prefix, qrHint) = parseEndpointName(info.endpointName)
             endpointNames[endpointId] = name
             val digits = info.authenticationDigits
             scope.launch {
                 val knownId = prefix?.let { db.peerIdForPrefix(it) }
-                if (knownId != null) {
-                    // Paired contact: skip the code. Its identity is verified cryptographically
-                    // during the handshake and the connection is dropped if it does not match.
-                    expectedPeerByEndpoint[endpointId] = knownId
-                    _status.value = "Reconnecting to $name"
-                    client.acceptConnection(endpointId, payloadCallback)
-                        .addOnFailureListener { _status.value = "Could not accept connection: ${it.message ?: "try again"}" }
-                } else {
-                    _pendingPairings.update { list ->
-                        list.filterNot { it.endpointId == endpointId } + PendingPairing(endpointId, name, digits)
+                val target = joinTarget
+                val joinId = if (target != null && prefix != null && target.deviceId.startsWith(prefix)) target.deviceId else null
+                val invite = myInvite?.takeIf { it.expiresAt > System.currentTimeMillis() }
+                when {
+                    knownId != null -> {
+                        // Paired contact: skip the code. Its identity is verified cryptographically
+                        // during the handshake and the connection is dropped if it does not match.
+                        expectedPeerByEndpoint[endpointId] = knownId
+                        _status.value = "Reconnecting to $name"
+                        acceptSilently(endpointId)
                     }
-                    _status.value = "Verify the pairing code on both devices"
+                    joinId != null -> {
+                        // We scanned this device's QR: its identity is checked in the handshake.
+                        expectedPeerByEndpoint[endpointId] = joinId
+                        _status.value = "Pairing with $name"
+                        acceptSilently(endpointId)
+                    }
+                    qrHint && invite != null -> {
+                        // Someone claims to have scanned our QR; they must prove it in the handshake.
+                        qrProvisional.add(endpointId)
+                        _status.value = "$name scanned your QR · pairing"
+                        acceptSilently(endpointId)
+                    }
+                    else -> {
+                        _pendingPairings.update { list ->
+                            list.filterNot { it.endpointId == endpointId } + PendingPairing(endpointId, name, digits)
+                        }
+                        _status.value = "Check that both phones show the same code"
+                    }
                 }
             }
         }
 
         override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
-            requestedEndpoints.remove(endpointId)
+            dropRequest(endpointId)
             _pendingPairings.update { list -> list.filterNot { it.endpointId == endpointId } }
             if (resolution.status.isSuccess) {
                 _status.value = "Connected · securing your session"
@@ -188,21 +222,29 @@ class ChatRepository(context: Context) {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
             val (name, prefix) = parseEndpointName(info.endpointName)
             endpointNames[endpointId] = name
+            if (prefix != null) endpointPrefixes[endpointId] = prefix
             scope.launch {
                 val knownId = prefix?.let { db.peerIdForPrefix(it) }
                 val peer = NearbyPeer(endpointId, name, known = knownId != null)
                 _availablePeers.update { list ->
                     (list.filterNot { it.endpointId == endpointId } + peer).sortedBy { it.name.lowercase() }
                 }
-                // Both sides discover each other; only the lower ID initiates so they never collide.
-                if (knownId != null && !endpointByPeerId.containsKey(knownId) && localDeviceId < knownId) {
+                val target = joinTarget
+                if (target != null && prefix != null && target.deviceId.startsWith(prefix) &&
+                    !endpointByPeerId.containsKey(target.deviceId)
+                ) {
+                    // We scanned this phone's QR: connect right away, no tapping needed.
+                    requestConnectionTo(endpointId, manual = false, qr = true)
+                } else if (knownId != null && !endpointByPeerId.containsKey(knownId) && localDeviceId < knownId) {
+                    // Both sides discover each other; only the lower ID initiates so they never collide.
                     requestConnectionTo(endpointId, manual = false)
                 }
             }
         }
 
         override fun onEndpointLost(endpointId: String) {
-            requestedEndpoints.remove(endpointId)
+            endpointPrefixes.remove(endpointId)
+            dropRequest(endpointId)
             _availablePeers.update { list -> list.filterNot { it.endpointId == endpointId } }
         }
     }
@@ -220,7 +262,16 @@ class ChatRepository(context: Context) {
 
     fun reportStatus(message: String) { _status.value = message }
 
-    fun setAppVisible(visible: Boolean) { appVisible = visible }
+    fun setAppVisible(visible: Boolean) {
+        appVisible = visible
+        if (visible) {
+            // Stay discoverable for as long as the app is on screen; the battery timer is for the background.
+            autoStopJob?.cancel()
+            _selectedPeerId.value?.let { markRead(it); scope.launch { refreshConversations() } }
+        } else if (_isDiscovering.value) {
+            scheduleAutoStop(IDLE_STOP_MS)
+        }
+    }
 
     fun setDisplayName(name: String) {
         val clean = TextRules.sanitizeName(name, fallback = _localName.value)
@@ -230,6 +281,7 @@ class ChatRepository(context: Context) {
     }
 
     fun startNearby() {
+        prefs.edit().putBoolean("paused", false).apply()
         // Idempotent: tapping again must not leave stale sessions after a partial failure.
         client.stopDiscovery()
         client.stopAdvertising()
@@ -250,13 +302,14 @@ class ChatRepository(context: Context) {
             }
     }
 
-    fun stopDiscovery() {
+    fun stopDiscovery(byUser: Boolean = false) {
+        if (byUser) prefs.edit().putBoolean("paused", true).apply()
         autoStopJob?.cancel()
         client.stopDiscovery()
         client.stopAdvertising()
         _isDiscovering.value = false
         _availablePeers.value = emptyList()
-        requestedEndpoints.clear()
+        clearRequests()
         _status.value = if (endpointByPeerId.isEmpty()) "Offline · ready to connect" else "Connected · discovery paused"
     }
 
@@ -274,7 +327,7 @@ class ChatRepository(context: Context) {
         _isDiscovering.value = false
         _availablePeers.value = emptyList()
         _pendingPairings.value = emptyList()
-        requestedEndpoints.clear()
+        clearRequests()
         _status.value = "Offline · ready to connect"
     }
 
@@ -325,10 +378,12 @@ class ChatRepository(context: Context) {
         _messages.value = emptyList()
         _selectedPeerId.value = peerId
         MessageNotifier.cancel(appContext, peerId)
-        scope.launch { refreshMessages(peerId) }
+        markRead(peerId)
+        scope.launch { refreshMessages(peerId); refreshConversations() }
     }
 
     fun closeConversation() {
+        _selectedPeerId.value?.let { markRead(it); scope.launch { refreshConversations() } }
         _selectedPeerId.value = null
         _messages.value = emptyList()
     }
@@ -347,38 +402,83 @@ class ChatRepository(context: Context) {
         }
     }
 
+    // ---------------------------------------------------------------- optional QR pairing
+
+    /** Starts a 5-minute, single-use invite and returns the text to render as a QR code. */
+    fun createInvite(): String {
+        val token = PairInvite.newToken()
+        myInvite = ActiveInvite(token, System.currentTimeMillis() + INVITE_TTL_MS)
+        _inviteActive.value = true
+        scope.launch {
+            delay(INVITE_TTL_MS)
+            if (myInvite?.token === token) { myInvite = null; _inviteActive.value = false }
+        }
+        return PairInvite.encode(PairInvite.Invite(localDeviceId, token, _localName.value))
+    }
+
+    fun cancelInvite() {
+        myInvite = null
+        _inviteActive.value = false
+    }
+
+    /** Called with the text of a scanned QR. Connects automatically as soon as that phone is seen. */
+    fun joinInvite(raw: String): Boolean {
+        val invite = PairInvite.decode(raw)
+        if (invite == null) { _status.value = "That QR code is not a Meshline invite"; return false }
+        if (invite.deviceId == localDeviceId) { _status.value = "That is this phone's own QR code"; return false }
+        joinTarget = invite
+        _status.value = "Looking for ${invite.name} nearby"
+        endpointPrefixes.entries.firstOrNull { invite.deviceId.startsWith(it.value) }?.let {
+            requestConnectionTo(it.key, manual = false, qr = true)
+        }
+        scope.launch {
+            delay(JOIN_WAIT_MS)
+            if (joinTarget === invite) {
+                joinTarget = null
+                _status.value = "Could not find ${invite.name} · keep their QR on screen and try again"
+            }
+        }
+        return true
+    }
+
     // ---------------------------------------------------------------- connection setup
 
     /** The visible name carries the first 32 hex chars of our ID so paired phones can recognise us. */
     private fun advertisedName(): String =
         TextRules.truncateUtf8(_localName.value, MAX_ADVERTISED_NAME_BYTES) + NAME_SEP + localDeviceId.take(ID_PREFIX_LEN)
 
-    private fun parseEndpointName(raw: String): Pair<String, String?> {
-        val i = raw.lastIndexOf(NAME_SEP)
-        if (i < 0) return TextRules.sanitizeName(raw) to null
-        val prefix = raw.substring(i + 1)
+    private fun parseEndpointName(raw: String): ParsedName {
+        var text = raw
+        var qr = false
+        if (text.endsWith("$NAME_SEP$QR_HINT")) { qr = true; text = text.dropLast(2) }
+        val i = text.lastIndexOf(NAME_SEP)
+        if (i < 0) return ParsedName(TextRules.sanitizeName(text), null, qr)
+        val prefix = text.substring(i + 1)
         val valid = prefix.length == ID_PREFIX_LEN && prefix.all { it in '0'..'9' || it in 'a'..'f' }
-        return TextRules.sanitizeName(raw.substring(0, i)) to (if (valid) prefix else null)
+        return ParsedName(TextRules.sanitizeName(text.substring(0, i)), if (valid) prefix else null, qr)
     }
 
-    private fun requestConnectionTo(endpointId: String, manual: Boolean) {
+    private fun requestConnectionTo(endpointId: String, manual: Boolean, qr: Boolean = false) {
         if (!requestedEndpoints.add(endpointId) && !manual) return
+        _connecting.value = requestedEndpoints.toSet()
         val name = endpointNames[endpointId] ?: "Nearby device"
-        client.requestConnection(advertisedName(), endpointId, lifecycleCallback)
+        val myName = advertisedName() + (if (qr) "$NAME_SEP$QR_HINT" else "")
+        client.requestConnection(myName, endpointId, lifecycleCallback)
             .addOnFailureListener {
-                requestedEndpoints.remove(endpointId)
+                dropRequest(endpointId)
                 if (manual) _status.value = "Could not request connection: ${it.message ?: "try again"}"
             }
-        _status.value = if (manual) "Requesting a secure connection to $name" else "Reconnecting to $name"
+        _status.value = if (manual || qr) "Connecting to $name" else "Reconnecting to $name"
     }
 
     private fun scheduleAutoStop(afterMs: Long) {
         autoStopJob?.cancel()
+        if (appVisible) return
         autoStopJob = scope.launch {
             delay(afterMs)
             if (_isDiscovering.value) {
                 stopDiscovery()
-                _status.value = "Search paused to save battery · tap Find nearby devices to resume"
+                _status.value = "Search paused to save battery · open Meshline to resume"
             }
         }
     }
@@ -393,10 +493,16 @@ class ChatRepository(context: Context) {
                 ephemeralKeys[endpointId] = pair
                 earlyPackets.remove(endpointId) ?: emptyList<ByteArray>()
             }
-            sendPlain(endpointId, JSONObject()
+            val hello = JSONObject()
                 .put("type", "hello")
                 .put("idKey", b64(identity.publicKeyEncoded))
-                .put("name", _localName.value))
+                .put("name", _localName.value)
+            joinTarget?.let { t ->
+                if (expectedPeerByEndpoint[endpointId] == t.deviceId) {
+                    hello.put("pair", PairInvite.proof(t.token, localDeviceId, t.deviceId))
+                }
+            }
+            sendPlain(endpointId, hello)
             // Anything the peer sent before our side was ready is processed now, in order.
             early.forEach { inbox.trySend(endpointId to it) }
         } catch (e: Exception) {
@@ -448,6 +554,15 @@ class ChatRepository(context: Context) {
             dropEndpoint(endpointId, "Device identity did not match a paired contact · disconnected")
             return
         }
+        if (qrProvisional.remove(endpointId)) {
+            val invite = myInvite
+            val proof = outer.optString("pair")
+            val ok = invite != null && invite.expiresAt > System.currentTimeMillis() && proof.isNotEmpty() &&
+                PairInvite.verifyProof(invite.token, peerId, localDeviceId, proof)
+            if (!ok) { dropEndpoint(endpointId, "QR pairing could not be verified · disconnected"); return }
+            myInvite = null   // single use
+            _inviteActive.value = false
+        }
         peerIdByEndpoint[endpointId] = peerId
         peerIdentityKeys[endpointId] = keyBytes
         peerDisplay[endpointId] = TextRules.sanitizeName(outer.optString("name"), endpointNames[endpointId] ?: "Nearby device")
@@ -482,6 +597,7 @@ class ChatRepository(context: Context) {
         }
         val sessionKey = SessionCrypto.deriveSessionKey(pair, ephemeral, localDeviceId, peerId)
         registerPeer(endpointId, peerId, peerDisplay[endpointId] ?: "Nearby device")
+        if (joinTarget?.deviceId == peerId) joinTarget = null
         sessionKeys[endpointId] = sessionKey
         _status.value = "Secure peer-to-peer session ready"
         scheduleAutoStop(CONNECTED_STOP_MS)
@@ -530,6 +646,7 @@ class ChatRepository(context: Context) {
                 ))
                 // ACK duplicates too: this repairs a lost ACK without duplicating the message.
                 sendSecure(endpointId, JSONObject().put("kind", "ack").put("messageId", messageId))
+                if (appVisible && _selectedPeerId.value == peerId) markRead(peerId)
                 refreshConversations()
                 if (_selectedPeerId.value == peerId) refreshMessages(peerId)
                 if (inserted && !(appVisible && _selectedPeerId.value == peerId)) {
@@ -634,7 +751,9 @@ class ChatRepository(context: Context) {
     }
 
     private suspend fun refreshConversations() {
-        _conversations.value = db.conversations()
+        val list = db.conversations()
+        _conversations.value = list
+        _unread.value = list.associate { it.peerId to db.unreadCount(it.peerId, lastRead(it.peerId)) }
     }
 
     private fun cleanupEndpoint(endpointId: String) {
@@ -642,9 +761,10 @@ class ChatRepository(context: Context) {
         if (peerId != null) endpointByPeerId.remove(peerId, endpointId)
         peerIdentityKeys.remove(endpointId)
         expectedPeerByEndpoint.remove(endpointId)
+        qrProvisional.remove(endpointId)
         pendingKeyPackets.remove(endpointId)
         peerDisplay.remove(endpointId)
-        requestedEndpoints.remove(endpointId)
+        dropRequest(endpointId)
         synchronized(handshakeLock) {
             ephemeralKeys.remove(endpointId)
             earlyPackets.remove(endpointId)
@@ -655,4 +775,23 @@ class ChatRepository(context: Context) {
     }
 
     private fun b64(bytes: ByteArray): String = Base64.getEncoder().withoutPadding().encodeToString(bytes)
+
+    private fun acceptSilently(endpointId: String) {
+        client.acceptConnection(endpointId, payloadCallback)
+            .addOnFailureListener { _status.value = "Could not accept connection: ${it.message ?: "try again"}" }
+    }
+
+    private fun dropRequest(id: String) {
+        requestedEndpoints.remove(id)
+        _connecting.value = requestedEndpoints.toSet()
+    }
+
+    private fun clearRequests() {
+        requestedEndpoints.clear()
+        endpointPrefixes.clear()
+        _connecting.value = emptySet()
+    }
+
+    private fun lastRead(peerId: String): Long = prefs.getLong("read_$peerId", 0L)
+    private fun markRead(peerId: String) { prefs.edit().putLong("read_$peerId", System.currentTimeMillis()).apply() }
 }

@@ -1,9 +1,9 @@
 <resources>
     <style name="Theme.Meshline" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#6D5CE7</item>
-        <item name="android:statusBarColor">#F7F7FB</item>
-        <item name="android:navigationBarColor">#F7F7FB</item>
+        <item name="android:colorAccent">#1F6FEB</item>
+        <item name="android:statusBarColor">#EDF3FB</item>
+        <item name="android:navigationBarColor">#EDF3FB</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>

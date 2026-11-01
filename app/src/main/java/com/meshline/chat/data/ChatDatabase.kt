@@ -162,6 +162,13 @@ class ChatDatabase(context: Context) : SQLiteOpenHelper(context, "meshline.db", 
         return result
     }
 
+    @Synchronized
+    fun unreadCount(peerId: String, since: Long): Int =
+        readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM messages WHERE peer_id=? AND outgoing=0 AND sent_at>?",
+            arrayOf(peerId, since.toString())
+        ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
     private fun decryptOrPlaceholder(value: String): String = try {
         atRestCrypto.decrypt(value)
     } catch (_: Exception) {

@@ -70,3 +70,15 @@
 - [ ] Android 11 or older: with Location off, tapping Find nearby devices shows the Location hint instead of failing silently.
 - [ ] Android 15: header and keyboard do not overlap the status/navigation bars.
 - [ ] Test on at least one Samsung/Xiaomi phone with default battery settings for 30 minutes in the background.
+
+## v0.3 additions
+
+- [ ] Fresh install: permission prompt appears once at first launch; afterwards search starts without tapping anything.
+- [ ] Bluetooth off / Location off (Android 11-): tapping Turn on opens the matching system screen; returning to the app starts search.
+- [ ] Pause search from the menu, close and reopen the app: search stays paused until you turn it on.
+- [ ] QR: phone A Menu → Show QR; phone B Scan QR. B connects with no code dialog; chat appears on both; the QR cannot be reused afterwards.
+- [ ] QR expiry: wait over 5 minutes, scan again: pairing fails with a clear message and nothing is added.
+- [ ] Scanning a non-Meshline QR shows "not a Meshline invite".
+- [ ] A third phone that connects while a QR is showing (without scanning) is NOT auto-accepted; it gets the normal code dialog.
+- [ ] Unread badge appears for a message received while the chat list is open and clears when the chat is opened.
+- [ ] Rotate / background / return keeps the open chat and drafts sensible; back button closes the drawer, then the chat.

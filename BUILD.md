@@ -1,25 +1,20 @@
 # Building the APK on GitHub
 
 The APK is built by GitHub Actions, not on your laptop — the workflow runs the
-Android SDK, signs the result, and publishes it as a release. You install it
-straight from the release page, and the next version installs **over** the old
-one without uninstalling.
+Android SDK and signs the result. It attaches the APK to the workflow run as a
+downloadable artifact.
+
+The app is under development, so **nothing is published as a release**. The
+APK is only ever an artifact of a run.
 
 Workflow file: `.github/workflows/android.yml`
 
-## How to ship a new version
+## How to get a new build
 
-1. Commit your changes and push to `main`. That rebuilds the APK and refreshes
-   the rolling **latest** release at
-   `https://github.com/priyanshuacc0-maker/chatbit/releases/tag/latest`.
-2. To cut a numbered version instead, push a tag:
-
-   ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
-   ```
-
-   That creates release `v0.3.0` with the APK attached.
+1. Commit your changes and push to `main`. That starts a build.
+2. Open **Actions → Build APK → the newest run**, and download the
+   `chatbit-apk-vc…` artifact from the **Artifacts** section at the bottom of
+   the run summary.
 
 You can also run it by hand: **Actions → Build APK → Run workflow**, optionally
 typing a version name.
@@ -33,8 +28,8 @@ Android only accepts an in-place update when both of these hold:
 - **Higher `versionCode`.** The workflow sets it to `1000 + run number`, which
   strictly increases with every build. You never have to bump it by hand.
 
-The `versionName` (what the phone shows as "0.3.0") comes from the tag, or from
-the manual-run input, or from `app/build.gradle.kts` if neither is given.
+The `versionName` (what the phone shows as "0.3.0") comes from the manual-run
+input, or from `app/build.gradle.kts` if it is left blank.
 
 If you ever change the signing key, phones will refuse the update and the app
 must be uninstalled once before the new key's APK installs.
