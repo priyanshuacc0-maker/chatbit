@@ -39,6 +39,14 @@ android {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 
+    lint {
+        // MainActivity calls registerForActivityResult without any Fragment
+        // dependency. Lint's InvalidFragmentVersionForActivityResult check
+        // only makes sense for FragmentActivity users, so it misfires here
+        // and fails the release build.
+        disable += "InvalidFragmentVersionForActivityResult"
+    }
+
     // Release signing. The keystore and its passwords come from environment
     // variables that CI fills from repository secrets; nothing secret is ever
     // committed. If they are absent (a plain local build), no release signing
