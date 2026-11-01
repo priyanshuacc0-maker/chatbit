@@ -51,6 +51,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.meshline.chat.data.ConversationSummary
 import com.meshline.chat.network.NearbyPeer
+import kotlinx.coroutines.delay
 
 enum class HomeFilter { ALL, UNREAD, ONLINE, NEARBY }
 
@@ -217,6 +219,8 @@ internal fun HomeScreen(
     connecting: Set<String>,
     status: String,
     discovering: Boolean,
+    problem: String?,
+    onRestart: () -> Unit,
     onMenu: () -> Unit,
     onNewChat: () -> Unit,
     onTurnOn: () -> Unit,
@@ -271,33 +275,28 @@ internal fun HomeScreen(
             }
             StatusStrip(status, discovering, onTurnOn)
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 110.dp)) {
-                if (filter == HomeFilter.NEARBY) {
-                    if (shownPeers.isEmpty()) item { EmptyState(
-                        title = if (discovering) "Looking for nearby phones…" else "Nearby is off",
-                        body = if (discovering) "Open Meshline on the other phone. It shows up here by itself — no internet needed."
-                               else "Turn search on to discover phones that have Meshline open.",
-                        primary = if (discovering) null else "Turn on" to onTurnOn,
-                        secondary = "Pair with QR instead" to onShowQr
-                    ) }
-                    items(shownPeers, key = { it.endpointId }) { peer ->
-                        PeerRow(peer, connecting.contains(peer.endpointId)) { onConnect(peer.endpointId) }
-                        HorizontalDivider(color = Border, modifier = Modifier.padding(start = 86.dp))
-                    }
-                } else {
-                    if (shownChats.isEmpty()) item {
-                        when {
-                            conversations.isEmpty() -> EmptyState(
-                                title = "No chats yet",
-                                body = "Open Meshline on both phones — they find each other automatically. Tap a device under Nearby to connect.",
-                                primary = "See nearby devices" to { onFilter(HomeFilter.NEARBY) },
-                                secondary = "Pair with QR (optional)" to onShowQr
-                            )
-                            else -> EmptyState(title = "Nothing here", body = "No chats match this view.", primary = null, secondary = null)
+                if (problem != null) item(key = "problem") { ProblemCard(problem, onRestart) }
+                if (filter == HomeFilter.NEARBY || filter == HomeFilter.ALL) {
+                    // Nearby phones are always on the main list, so connecting never hides behind a tab.
+                    if (shownPeers.isNotEmpty()) {
+                        item(key = "nearby-label") { SectionLabel("Nearby now · ${shownPeers.size} — tap to connect") }
+                        items(shownPeers, key = { "peer-" + it.endpointId }) { peer ->
+                            PeerRow(peer, connecting.contains(peer.endpointId)) { onConnect(peer.endpointId) }
+                            HorizontalDivider(color = Border, modifier = Modifier.padding(start = 86.dp))
                         }
+                    } else if (q.isEmpty()) {
+                        item(key = "searching") { SearchingCard(discovering, onTurnOn, onRestart) }
                     }
-                    items(shownChats, key = { it.peerId }) { c ->
-                        ConversationRow(c, onlinePeerIds.contains(c.peerId), unread[c.peerId] ?: 0) { onOpenConversation(c.peerId) }
-                        HorizontalDivider(color = Border, modifier = Modifier.padding(start = 86.dp))
+                }
+                if (filter != HomeFilter.NEARBY) {
+                    if (shownChats.isNotEmpty()) {
+                        if (filter == HomeFilter.ALL) item(key = "chats-label") { SectionLabel("Chats") }
+                        items(shownChats, key = { "chat-" + it.peerId }) { c ->
+                            ConversationRow(c, onlinePeerIds.contains(c.peerId), unread[c.peerId] ?: 0) { onOpenConversation(c.peerId) }
+                            HorizontalDivider(color = Border, modifier = Modifier.padding(start = 86.dp))
+                        }
+                    } else if (conversations.isNotEmpty() || filter != HomeFilter.ALL) {
+                        item(key = "empty") { EmptyState(title = "Nothing here", body = "No chats match this view.", primary = null, secondary = null) }
                     }
                 }
             }
@@ -364,7 +363,10 @@ private fun ConversationRow(c: ConversationSummary, online: Boolean, unread: Int
 
 @Composable
 private fun PeerRow(peer: NearbyPeer, connecting: Boolean, onConnect: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = !connecting, onClick = onConnect).padding(horizontal = 18.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Avatar(peer.name, 56.dp)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -377,6 +379,77 @@ private fun PeerRow(peer: NearbyPeer, connecting: Boolean, onConnect: () -> Unit
             Button(onClick = onConnect, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)) {
                 Text(if (peer.known) "Open" else "Connect", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 22.dp, vertical = 8.dp))
+}
+
+@Composable
+private fun ProblemCard(message: String, onRetry: () -> Unit) {
+    Surface(
+        color = Color(0xFFFFF1F0), shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Danger.copy(alpha = 0.3f)),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Search problem", color = Danger, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Spacer(Modifier.height(4.dp))
+            Text(message, color = Ink, fontSize = 13.sp, lineHeight = 19.sp)
+            Spacer(Modifier.height(6.dp))
+            TextButton(onClick = onRetry, contentPadding = PaddingValues(0.dp)) {
+                Text("Try again", color = Accent, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+/** Shown while nobody is visible yet. After 15 s it explains what to check instead of just spinning. */
+@Composable
+private fun SearchingCard(discovering: Boolean, onTurnOn: () -> Unit, onRestart: () -> Unit) {
+    var slow by remember(discovering) { mutableStateOf(false) }
+    LaunchedEffect(discovering) {
+        slow = false
+        if (discovering) { delay(15_000); slow = true }
+    }
+    Surface(
+        color = Glass, shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, Border),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (discovering) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.5.dp, color = Accent)
+                else Icon(Icons.Filled.WifiTethering, contentDescription = null, tint = Muted, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(if (discovering) "Looking for nearby phones" else "Nearby is off", color = Ink, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (discovering) "Open Meshline on the other phone — it will appear right here to tap and connect."
+                        else "Turn search on to find phones that have Meshline open.",
+                        color = Muted, fontSize = 13.sp, lineHeight = 19.sp
+                    )
+                }
+            }
+            if (!discovering) {
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onTurnOn, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
+                    Text("Turn on", fontWeight = FontWeight.SemiBold)
+                }
+            } else if (slow) {
+                Spacer(Modifier.height(12.dp))
+                Text("Nobody showing up? Check on BOTH phones:", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "• Meshline is open and search is on\n• Bluetooth and Wi-Fi are on\n• Location is on (some phones need it)\n• The phones are within a few metres",
+                    color = Muted, fontSize = 13.sp, lineHeight = 20.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onRestart, shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Accent.copy(alpha = 0.4f))) {
+                    Text("Restart search", color = Accent)
+                }
             }
         }
     }

@@ -4,6 +4,13 @@ Meshline is a native Android peer-to-peer text-chat prototype. Its transport is 
 
 > **Honest build status:** this is an initial source prototype for local text chat, not a verified production messenger. The container used to create it has no Android SDK or Gradle installation, so a full Android APK build and two-physical-phone radio test could not be run here. The platform-neutral session-crypto code was compiled independently and passed a smoke test for matching ECDH keys, Unicode AES-GCM round-trip, nonce uniqueness and tamper rejection. Kotlin source parsing and manifest/resource XML parsing also passed, but this is not a full Android compile. Use the two-device checklist below before relying on it.
 
+## v0.3.1 fixes
+
+- **Nearby phones are always on the main list** ("Nearby now — tap to connect"), tap anywhere on the row to connect. Previously they only showed under the Nearby chip, so the app looked like it was searching forever.
+- **Search never fails silently:** if advertising or discovery cannot start, a red card explains why with a Try again button. After 15 s with nobody found, a checklist appears (both phones open, Bluetooth/Wi-Fi/Location on, within a few metres) with Restart search.
+- Connection requests time out after 45 s with a clear message instead of an endless spinner.
+- Chat header is much more compact (smaller avatar, title and tabs; the duplicate shield button is gone).
+
 ## What is new in v0.3
 
 - **Auto-connect.** Search starts by itself when the app opens (permissions are asked once on first launch) and stays on while the app is visible; the battery timer only applies in the background. "Pause search" is respected. Bluetooth/Location-off now opens the right system screen.

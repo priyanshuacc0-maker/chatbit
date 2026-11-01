@@ -2,6 +2,7 @@ package com.meshline.chat.network
 
 import android.content.Context
 import android.os.Build
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
 import com.google.android.gms.nearby.connection.ConnectionInfo
@@ -73,6 +74,7 @@ class ChatRepository(context: Context) {
         private const val INVITE_TTL_MS = 5 * 60_000L
         private const val JOIN_WAIT_MS = 45_000L
         private const val QR_HINT = "q"
+        private const val REQUEST_TIMEOUT_MS = 45_000L
     }
 
     private val appContext = context.applicationContext
@@ -113,6 +115,11 @@ class ChatRepository(context: Context) {
     private val _inviteActive = MutableStateFlow(false)
     val inviteActive: StateFlow<Boolean> = _inviteActive.asStateFlow()
     val searchPausedByUser: Boolean get() = prefs.getBoolean("paused", false)
+    private val _problem = MutableStateFlow<String?>(null)
+    /** Human-readable reason when advertising or discovery could not start; null when all is well. */
+    val problem: StateFlow<String?> = _problem.asStateFlow()
+    @Volatile private var advProblem: String? = null
+    @Volatile private var discProblem: String? = null
 
     /** True while discovery is running or at least one peer is connected. Drives the service. */
     val isActive: StateFlow<Boolean> = combine(_isDiscovering, _onlinePeerIds) { discovering, online ->
@@ -288,17 +295,31 @@ class ChatRepository(context: Context) {
         val advertisingOptions = AdvertisingOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()
         val discoveryOptions = DiscoveryOptions.Builder().setStrategy(Strategy.P2P_CLUSTER).build()
         client.startAdvertising(advertisedName(), SERVICE_ID, lifecycleCallback, advertisingOptions)
-            .addOnSuccessListener { _status.value = "Making this phone discoverable" }
-            .addOnFailureListener { _status.value = "Advertising unavailable: ${it.message ?: "check permissions and radios"}" }
+            .addOnSuccessListener { advProblem = null; publishProblem() }
+            .addOnFailureListener {
+                // "Already advertising" just means a previous start is still active: not a problem.
+                advProblem = if (isAlready(it)) null
+                else "Other phones cannot see this one yet: ${it.message ?: "check Bluetooth, Wi-Fi and permissions"}"
+                publishProblem()
+            }
         client.startDiscovery(SERVICE_ID, discoveryCallback, discoveryOptions)
             .addOnSuccessListener {
                 _isDiscovering.value = true
+                discProblem = null
+                publishProblem()
                 _status.value = "Searching nearby · no internet required"
                 scheduleAutoStop(IDLE_STOP_MS)
             }
             .addOnFailureListener {
-                _isDiscovering.value = false
-                _status.value = "Discovery unavailable: ${it.message ?: "check permissions and radios"}"
+                if (isAlready(it)) {
+                    _isDiscovering.value = true
+                    discProblem = null
+                } else {
+                    _isDiscovering.value = false
+                    discProblem = "This phone cannot search right now: ${it.message ?: "check Bluetooth, Wi-Fi, Location and permissions"}"
+                    _status.value = "Search could not start"
+                }
+                publishProblem()
             }
     }
 
@@ -469,6 +490,17 @@ class ChatRepository(context: Context) {
                 if (manual) _status.value = "Could not request connection: ${it.message ?: "try again"}"
             }
         _status.value = if (manual || qr) "Connecting to $name" else "Reconnecting to $name"
+        // Never leave a spinner running forever if the other phone does not answer.
+        scope.launch {
+            delay(REQUEST_TIMEOUT_MS)
+            if (requestedEndpoints.contains(endpointId) && !peerIdByEndpoint.containsKey(endpointId) &&
+                _pendingPairings.value.none { it.endpointId == endpointId }
+            ) {
+                client.disconnectFromEndpoint(endpointId)
+                dropRequest(endpointId)
+                _status.value = "No answer from $name · keep Meshline open on that phone and try again"
+            }
+        }
     }
 
     private fun scheduleAutoStop(afterMs: Long) {
@@ -786,7 +818,17 @@ class ChatRepository(context: Context) {
         _connecting.value = requestedEndpoints.toSet()
     }
 
+    private fun publishProblem() { _problem.value = discProblem ?: advProblem }
+
+    private fun isAlready(e: Exception): Boolean {
+        val code = (e as? ApiException)?.statusCode
+        return code == 8001 || code == 8002   // STATUS_ALREADY_ADVERTISING / STATUS_ALREADY_DISCOVERING
+    }
+
     private fun clearRequests() {
+        advProblem = null
+        discProblem = null
+        _problem.value = null
         requestedEndpoints.clear()
         endpointPrefixes.clear()
         _connecting.value = emptySet()

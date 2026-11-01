@@ -102,21 +102,20 @@ internal fun ChatScreen(
 
     Column(Modifier.fillMaxSize().background(PageBrush).imePadding()) {
         // ---- header
-        Row(Modifier.fillMaxWidth().background(Glass).padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink) }
-            Avatar(peerName, 48.dp, isOnline)
-            Spacer(Modifier.width(12.dp))
+        Row(Modifier.fillMaxWidth().background(Glass).padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack, modifier = Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Ink) }
+            Avatar(peerName, 38.dp, isOnline)
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(peerName, color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(peerName, color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (isOnline) Green else Muted.copy(alpha = 0.5f)))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (isOnline) "Online · secure direct link" else "Offline · messages queue", color = Muted, fontSize = 13.sp, maxLines = 1)
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (isOnline) Green else Muted.copy(alpha = 0.5f)))
+                    Spacer(Modifier.width(5.dp))
+                    Text(if (isOnline) "Online · secure direct link" else "Offline · messages queue", color = Muted, fontSize = 12.sp, maxLines = 1)
                 }
             }
-            IconButton(onClick = { tab = 1 }) { Icon(Icons.Filled.Shield, contentDescription = "Security details", tint = Ink) }
             Box {
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = Ink) }
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) { Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = Ink) }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                     DropdownMenuItem(
                         text = { Text("Forget this device", color = Danger) },
@@ -127,7 +126,7 @@ internal fun ChatScreen(
             }
         }
         // ---- tabs
-        Row(Modifier.fillMaxWidth().background(Glass.copy(alpha = 0.6f)).padding(horizontal = 12.dp)) {
+        Row(Modifier.fillMaxWidth().background(Glass.copy(alpha = 0.55f)).padding(horizontal = 6.dp)) {
             TabPill("Chat", Icons.Filled.Forum, tab == 0) { tab = 0 }
             TabPill("Details", Icons.Filled.Info, tab == 1) { tab = 1 }
         }
@@ -219,13 +218,13 @@ private fun HorizontalLine() {
 @Composable
 private fun TabPill(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
     Column(Modifier.clickable(onClick = onClick).padding(horizontal = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = if (selected) Accent else Ink, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(label, color = if (selected) Accent else Ink, fontSize = 16.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+        Row(Modifier.padding(top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = if (selected) Accent else Ink, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(label, color = if (selected) Accent else Ink, fontSize = 14.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
         }
-        Spacer(Modifier.height(8.dp))
-        Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(if (selected) Accent else Color.Transparent))
+        Spacer(Modifier.height(4.dp))
+        Box(Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(2.dp)).background(if (selected) Accent else Color.Transparent))
     }
 }
 

@@ -20,6 +20,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val unread = repository.unread
     val connecting = repository.connecting
     val inviteActive = repository.inviteActive
+    val problem = repository.problem
     val searchPausedByUser: Boolean get() = repository.searchPausedByUser
 
     fun startNearby() = repository.startNearby()

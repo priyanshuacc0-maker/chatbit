@@ -65,6 +65,7 @@ fun MeshlineApp(
     val localName by viewModel.localName.collectAsStateWithLifecycle()
     val unread by viewModel.unread.collectAsStateWithLifecycle()
     val connecting by viewModel.connecting.collectAsStateWithLifecycle()
+    val problem by viewModel.problem.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -124,6 +125,8 @@ fun MeshlineApp(
                     connecting = connecting,
                     status = status,
                     discovering = discovering,
+                    problem = problem,
+                    onRestart = { turnOn() },
                     onMenu = { openDrawer() },
                     onNewChat = { filter = HomeFilter.NEARBY; if (!discovering) turnOn() },
                     onTurnOn = { turnOn() },
