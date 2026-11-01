@@ -27,7 +27,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // play-services-nearby 19.5.0 ships Kotlin metadata from a newer
+        // compiler than the 2.0.21 used here. The API surface we call is
+        // plain Java-style, so skipping the version check is safe and keeps
+        // the dependency current.
+        freeCompilerArgs += "-Xskip-metadata-version-check"
+    }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
