@@ -33,13 +33,23 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The runner image already ships the Android SDK, so use it directly and
+      # just add the packages this project needs. (android-actions/setup-android
+      # is avoided on purpose: its `sdkmanager tools` call fails on current
+      # images, where that package no longer exists.)
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKMGR=$(ls -1d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -z "$SDKMGR" ]; then
+            echo "::error title=No sdkmanager::Could not find sdkmanager under $SDK"
+            exit 1
+          fi
+          yes | "$SDKMGR" --sdk_root="$SDK" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --sdk_root="$SDK" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
