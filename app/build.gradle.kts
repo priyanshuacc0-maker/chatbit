@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// CI passes these in so every build gets a higher versionCode than the last one.
+// Local builds fall back to the values below.
+val overrideVersionCode = (findProperty("versionCodeOverride") as String?)?.toIntOrNull()
+val overrideVersionName = findProperty("versionNameOverride") as String?
+
 android {
     namespace = "com.meshline.chat"
     compileSdk = 35
@@ -12,8 +17,8 @@ android {
         applicationId = "com.meshline.chat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = overrideVersionCode ?: 2
+        versionName = overrideVersionName ?: "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -25,6 +30,31 @@ android {
     kotlinOptions { jvmTarget = "17" }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    // Release signing. The keystore and its passwords come from environment
+    // variables that CI fills from repository secrets; nothing secret is ever
+    // committed. If they are absent (a plain local build), no release signing
+    // config is attached and only debug builds are usable.
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("MESHLINE_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("MESHLINE_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("MESHLINE_KEY_ALIAS")
+                keyPassword = System.getenv("MESHLINE_KEY_PASSWORD")
+                storeType = System.getenv("MESHLINE_KEYSTORE_TYPE")
+                    ?: if (ksPath.endsWith(".p12", ignoreCase = true)) "PKCS12" else "JKS"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
+        }
     }
 }
 
